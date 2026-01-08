@@ -532,8 +532,23 @@
 
         /* Date picker calendar icon styling */
         .day-selector::-webkit-calendar-picker-indicator {
-            filter: invert(1);
+            filter: invert(0);
             cursor: pointer;
+            opacity: 0.7;
+        }
+
+        /* Date range selector */
+        .date-range-selector {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .date-range-selector label {
+            color: var(--text-primary);
+            font-size: 0.875rem;
+            font-weight: 500;
         }
 
         .back-btn {
@@ -732,6 +747,18 @@
                         <button class="view-tab" data-view="year">Year</button>
                     </div>
 
+                    <!-- Date Range Controls (hidden for Year and Hourly) -->
+                    <div id="dateRangeControls" class="chart-container" style="padding: 1rem;">
+                        <div class="date-range-selector">
+                            <label>From:</label>
+                            <input type="date" class="day-selector" id="rangeStart" style="width: auto; margin-bottom: 0;">
+                            <label>To:</label>
+                            <input type="date" class="day-selector" id="rangeEnd" style="width: auto; margin-bottom: 0;">
+                            <button class="btn btn-primary" id="applyRange">Apply Range</button>
+                            <button class="btn btn-secondary" id="resetRange">Reset</button>
+                        </div>
+                    </div>
+
                     <!-- Hourly View -->
                     <div class="hidden" id="hourlyView">
                         <div class="chart-container">
@@ -825,6 +852,13 @@
         let sites = [];
         let selectedSiteId = null;
         let currentView = 'month';
+
+        // Independent date ranges for each view
+        let dateRanges = {
+            day: { start: null, end: null },
+            week: { start: null, end: null },
+            month: { start: null, end: null }
+        };
 
         // Chart instances
         let mainChart = null;
@@ -942,23 +976,53 @@
             };
         }
 
+        function filterDataByRange(site, view) {
+            if (!site || !site.data) return site.data;
+
+            // Get date range for current view
+            const range = dateRanges[view];
+
+            // If no range set for this view, return appropriate default
+            if (!range || !range.start || !range.end) {
+                if (view === 'day') {
+                    // Day view default: last 30 days
+                    return site.data.slice(-30);
+                }
+                // Week/Month: return all data
+                return site.data;
+            }
+
+            const startDate = new Date(range.start);
+            const endDate = new Date(range.end);
+
+            return site.data.filter(d => {
+                const date = new Date(d.dateStr);
+                return date >= startDate && date <= endDate;
+            });
+        }
+
         function getChartData(site, view) {
             if (!site || !site.data) return [];
 
             const cap = site.capacityKw || 0;
 
+            // Apply view-specific date range filter FIRST
+            const filteredData = filterDataByRange(site, view);
+
             if (view === 'day') {
-                const last30 = site.data.slice(-30);
-                return last30.map(d => ({
+                // filteredData already handles default (last 30) or custom range
+                return filteredData.map(d => ({
                     label: d.date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }),
                     generation: d.dailyKwh,
-                    cf: cap > 0 ? (d.dailyKwh / (cap * 24)) * 100 : 0
+                    cf: cap > 0 ? (d.dailyKwh / (cap * 24)) * 100 : 0,
+                    date: d.date,
+                    dailyKwh: d.dailyKwh
                 }));
             }
 
             if (view === 'week') {
                 const weeks = {};
-                site.data.forEach(d => {
+                filteredData.forEach(d => {
                     const weekStart = new Date(d.date);
                     weekStart.setDate(weekStart.getDate() - weekStart.getDay() + 1);
                     const key = weekStart.toISOString().split('T')[0];
@@ -970,13 +1034,15 @@
                 return Object.values(weeks).map(w => ({
                     label: `w/c ${w.weekStart.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}`,
                     generation: w.total / 1000,
-                    cf: cap > 0 ? (w.total / (cap * w.days.length * 24)) * 100 : 0
+                    cf: cap > 0 ? (w.total / (cap * w.days.length * 24)) * 100 : 0,
+                    totalKwh: w.total,
+                    days: w.days
                 }));
             }
 
             if (view === 'month') {
                 const months = {};
-                site.data.forEach(d => {
+                filteredData.forEach(d => {
                     const key = `${d.date.getFullYear()}-${String(d.date.getMonth() + 1).padStart(2, '0')}`;
                     if (!months[key]) months[key] = { days: [], total: 0, month: d.date };
                     months[key].days.push(d);
@@ -986,13 +1052,15 @@
                 return Object.values(months).map(m => ({
                     label: m.month.toLocaleDateString('en-GB', { month: 'short', year: '2-digit' }),
                     generation: m.total / 1000,
-                    cf: cap > 0 ? (m.total / (cap * m.days.length * 24)) * 100 : 0
+                    cf: cap > 0 ? (m.total / (cap * m.days.length * 24)) * 100 : 0,
+                    totalKwh: m.total,
+                    days: m.days
                 }));
             }
 
             if (view === 'year') {
                 const years = {};
-                site.data.forEach(d => {
+                filteredData.forEach(d => {
                     const key = d.date.getFullYear();
                     if (!years[key]) years[key] = { days: [], total: 0, year: key };
                     years[key].days.push(d);
@@ -1002,7 +1070,9 @@
                 return Object.values(years).map(y => ({
                     label: y.year.toString(),
                     generation: y.total / 1000,
-                    cf: cap > 0 ? (y.total / (cap * y.days.length * 24)) * 100 : 0
+                    cf: cap > 0 ? (y.total / (cap * y.days.length * 24)) * 100 : 0,
+                    totalKwh: y.total,
+                    days: y.days
                 }));
             }
 
@@ -1029,6 +1099,55 @@
                     utilisation: maxHH > 0 ? (val / maxHH) * 100 : 0
                 };
             });
+        }
+
+        function calculatePeriodStats(chartData, view, site) {
+            if (!chartData || chartData.length === 0) return null;
+
+            const config = ASSET_TYPES[site.assetType];
+            const hasCapacity = site.capacityKw && site.capacityKw > 0;
+
+            let total = 0;
+            let peak = 0;
+            let min = Infinity;
+            let cfValues = [];
+
+            chartData.forEach(period => {
+                const periodValue = view === 'day' ? period.generation : (period.totalKwh || period.generation * 1000);
+                total += periodValue;
+
+                if (periodValue > peak) peak = periodValue;
+                if (periodValue < min && periodValue > 0) min = periodValue;
+
+                if (period.cf) cfValues.push(period.cf);
+            });
+
+            if (min === Infinity) min = 0;
+
+            const count = chartData.length;
+            const avg = count > 0 ? total / count : 0;
+            const avgCf = cfValues.length > 0
+                ? cfValues.reduce((a, b) => a + b, 0) / cfValues.length
+                : 0;
+
+            // Unit conversion
+            const unit = view === 'day' ? 'kWh' : 'MWh';
+            const displayTotal = view === 'day' ? total : total / 1000;
+            const displayPeak = view === 'day' ? peak : peak / 1000;
+            const displayMin = view === 'day' ? min : min / 1000;
+            const displayAvg = view === 'day' ? avg : avg / 1000;
+
+            return {
+                total: displayTotal,
+                peak: displayPeak,
+                min: displayMin,
+                avg: displayAvg,
+                cf: avgCf,
+                unit: unit,
+                count: count,
+                hasCapacity: hasCapacity,
+                cfColor: hasCapacity ? getCFColor(avgCf, site.assetType) : 'var(--text-primary)'
+            };
         }
 
         /*
@@ -1185,6 +1304,7 @@
                 document.getElementById('capacityInput').value = site.capacityKw || '';
 
                 populateDaySelector(site);
+                initializeDateRangePickers(site);
             }
 
             updateSiteDetailView();
@@ -1295,13 +1415,74 @@
                 const genData = chartData.map(d => d.generation);
                 const cfData = chartData.map(d => d.cf);
 
+                // Calculate and display period stats
+                const periodStats = calculatePeriodStats(chartData, currentView, site);
+
+                if (periodStats) {
+                    // Create/update stats grid above chart
+                    let statsContainer = document.getElementById('periodStatsGrid');
+                    if (!statsContainer) {
+                        // Create container if doesn't exist
+                        const mainChartContainer = document.getElementById('mainChart').closest('.chart-container');
+                        statsContainer = document.createElement('div');
+                        statsContainer.id = 'periodStatsGrid';
+                        statsContainer.className = 'stats-grid';
+                        statsContainer.style.marginBottom = '1rem';
+                        mainChartContainer.insertBefore(statsContainer, mainChartContainer.firstChild);
+                    }
+
+                    statsContainer.innerHTML = `
+                        <div class="stat-card" style="padding: 0.75rem;">
+                            <div class="label">Period Total</div>
+                            <div class="value" style="font-size: 1.25rem;">${formatNumber(periodStats.total, 1)} ${periodStats.unit}</div>
+                            <div class="subtitle">${periodStats.count} ${currentView === 'day' ? 'days' : currentView + 's'}</div>
+                        </div>
+                        <div class="stat-card" style="padding: 0.75rem;">
+                            <div class="label">Avg Capacity Factor</div>
+                            <div class="value" style="font-size: 1.25rem; color: ${periodStats.cfColor}">
+                                ${periodStats.hasCapacity ? formatNumber(periodStats.cf, 1) + '%' : '-'}
+                            </div>
+                            <div class="subtitle">Across period</div>
+                        </div>
+                        <div class="stat-card" style="padding: 0.75rem;">
+                            <div class="label">Peak ${currentView === 'day' ? 'Day' : currentView}</div>
+                            <div class="value" style="font-size: 1.25rem; color: var(--success);">
+                                ${formatNumber(periodStats.peak, 1)} ${periodStats.unit}
+                            </div>
+                        </div>
+                        <div class="stat-card" style="padding: 0.75rem;">
+                            <div class="label">Min ${currentView === 'day' ? 'Day' : currentView}</div>
+                            <div class="value" style="font-size: 1.25rem; color: var(--error);">
+                                ${formatNumber(periodStats.min, 1)} ${periodStats.unit}
+                            </div>
+                        </div>
+                        <div class="stat-card" style="padding: 0.75rem;">
+                            <div class="label">Average ${currentView === 'day' ? 'Day' : currentView}</div>
+                            <div class="value" style="font-size: 1.25rem;">
+                                ${formatNumber(periodStats.avg, 1)} ${periodStats.unit}
+                            </div>
+                        </div>
+                    `;
+                }
+
+                // Update title
                 const titles = {
                     day: 'Daily Generation (Last 30 Days) — kWh',
                     week: 'Weekly Generation — MWh',
                     month: 'Monthly Generation — MWh',
                     year: 'Yearly Generation — MWh'
                 };
-                document.getElementById('mainChartTitle').textContent = titles[currentView];
+
+                // Update title to reflect date range if active
+                let title = titles[currentView];
+                const range = dateRanges[currentView];
+                if (range && range.start && range.end && currentView !== 'year') {
+                    const startDate = new Date(range.start).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+                    const endDate = new Date(range.end).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+                    title = `${currentView === 'day' ? 'Daily' : currentView === 'week' ? 'Weekly' : 'Monthly'} Generation (${startDate} - ${endDate})`;
+                }
+
+                document.getElementById('mainChartTitle').textContent = title;
 
                 if (mainChart) mainChart.destroy();
                 mainChart = new Chart(document.getElementById('mainChart'), {
@@ -1585,8 +1766,89 @@
                 document.getElementById('hourlyView').classList.toggle('hidden', currentView !== 'hourly');
                 document.getElementById('aggregateView').classList.toggle('hidden', currentView === 'hourly');
 
+                // Show/hide date range controls (hide for Year and Hourly)
+                const showRangeControls = ['day', 'week', 'month'].includes(currentView);
+                document.getElementById('dateRangeControls').classList.toggle('hidden', !showRangeControls);
+
+                // Reload date pickers with view-specific values
+                if (showRangeControls && selectedSiteId) {
+                    const site = sites.find(s => s.id === selectedSiteId);
+                    initializeDateRangePickers(site);
+                }
+
                 updateCharts();
             }
+        });
+
+        // Initialize date range pickers with view-specific values
+        function initializeDateRangePickers(site) {
+            if (!site || !site.data || site.data.length === 0) return;
+
+            const rangeStart = document.getElementById('rangeStart');
+            const rangeEnd = document.getElementById('rangeEnd');
+
+            const firstDate = site.data[0].dateStr;
+            const lastDate = site.data[site.data.length - 1].dateStr;
+
+            // Set min/max constraints
+            rangeStart.min = firstDate;
+            rangeStart.max = lastDate;
+            rangeEnd.min = firstDate;
+            rangeEnd.max = lastDate;
+
+            // Load saved range for current view, or set defaults
+            const range = dateRanges[currentView];
+            if (range && range.start && range.end) {
+                rangeStart.value = range.start;
+                rangeEnd.value = range.end;
+            } else {
+                // Default for day view: last 30 days
+                if (currentView === 'day') {
+                    const lastDateObj = new Date(lastDate);
+                    const thirtyDaysAgo = new Date(lastDateObj);
+                    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+                    rangeStart.value = thirtyDaysAgo.toISOString().split('T')[0];
+                    rangeEnd.value = lastDate;
+                } else {
+                    // Week/Month: all data
+                    rangeStart.value = firstDate;
+                    rangeEnd.value = lastDate;
+                }
+            }
+        }
+
+        // Apply date range button - saves to current view
+        document.getElementById('applyRange').addEventListener('click', () => {
+            const startValue = document.getElementById('rangeStart').value;
+            const endValue = document.getElementById('rangeEnd').value;
+
+            if (startValue && endValue) {
+                const start = new Date(startValue);
+                const end = new Date(endValue);
+
+                if (start > end) {
+                    alert('Start date must be before end date');
+                    return;
+                }
+
+                // Save range for current view
+                dateRanges[currentView] = {
+                    start: startValue,
+                    end: endValue
+                };
+
+                updateCharts();
+            }
+        });
+
+        // Reset date range button - clears current view's range
+        document.getElementById('resetRange').addEventListener('click', () => {
+            // Clear range for current view
+            dateRanges[currentView] = { start: null, end: null };
+
+            const site = sites.find(s => s.id === selectedSiteId);
+            initializeDateRangePickers(site);
+            updateCharts();
         });
 
         document.getElementById('daySelector').addEventListener('change', updateHourlyView);
