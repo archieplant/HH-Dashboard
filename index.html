@@ -1086,16 +1086,17 @@
             sites.forEach(site => {
                 const stats = calculateSiteStats(site);
                 const config = ASSET_TYPES[site.assetType];
-                const cfColor = stats && site.capacityKw && stats.capacityFactor >= config.expectedCF[0]
+                const hasCapacity = site.capacityKw && site.capacityKw > 0;
+                const cfColor = stats && hasCapacity && stats.capacityFactor >= config.expectedCF[0]
                     ? 'text-success' : 'text-error';
 
                 const row = document.createElement('tr');
                 row.innerHTML = `
                     <td><strong>${config.icon} ${site.name}</strong></td>
                     <td>${config.name}</td>
-                    <td>${site.capacityKw ? site.capacityKw + ' kW' : '-'}</td>
+                    <td>${hasCapacity ? site.capacityKw + ' kW' : '-'}</td>
                     <td>${stats ? formatNumber(stats.totalMwh, 1) : '-'}</td>
-                    <td class="${cfColor}">${stats && site.capacityKw ? formatNumber(stats.capacityFactor, 1) + '%' : '-'}</td>
+                    <td class="${cfColor}">${stats && hasCapacity ? formatNumber(stats.capacityFactor, 1) + '%' : '-'}</td>
                     <td>${stats ? formatNumber(stats.availability, 1) + '%' : '-'}</td>
                     <td>${site.data.length}</td>
                 `;
@@ -1152,6 +1153,8 @@
             const cfColor = site.capacityKw && stats.capacityFactor >= config.expectedCF[0] ? 'var(--success)' : 'var(--error)';
             const availColor = stats.availability >= 95 ? 'var(--success)' : 'var(--warning)';
 
+            const hasCapacity = site.capacityKw && site.capacityKw > 0;
+
             document.getElementById('statsGrid').innerHTML = `
                 <div class="stat-card">
                     <div class="label">Total Generation</div>
@@ -1160,13 +1163,13 @@
                 </div>
                 <div class="stat-card">
                     <div class="label">Capacity Factor</div>
-                    <div class="value" style="color: ${site.capacityKw ? cfColor : 'var(--text-primary)'}">${site.capacityKw ? formatNumber(stats.capacityFactor, 1) + '%' : 'Set capacity'}</div>
+                    <div class="value" style="color: ${hasCapacity ? cfColor : 'var(--text-primary)'}">${hasCapacity ? formatNumber(stats.capacityFactor, 1) + '%' : 'Set capacity'}</div>
                     <div class="subtitle">Target: ${config.expectedCF[0]}-${config.expectedCF[1]}%</div>
                 </div>
                 <div class="stat-card">
                     <div class="label">Last 12 Months</div>
                     <div class="value">${formatNumber(stats.last12mMwh, 1)} MWh</div>
-                    <div class="subtitle">CF: ${site.capacityKw ? formatNumber(stats.last12mCf, 1) + '%' : '-'}</div>
+                    <div class="subtitle">CF: ${hasCapacity ? formatNumber(stats.last12mCf, 1) + '%' : '-'}</div>
                 </div>
                 <div class="stat-card">
                     <div class="label">Daily Average</div>
@@ -1334,9 +1337,10 @@
             const max = Math.max(...genValues);
             const min = Math.min(...genValues.filter(v => v > 0)) || 0;
             const avg = total / 48;
-            const cf = site.capacityKw > 0 ? (total / (site.capacityKw * 24)) * 100 : 0;
+            const hasCapacity = site.capacityKw && site.capacityKw > 0;
+            const cf = hasCapacity ? (total / (site.capacityKw * 24)) * 100 : 0;
 
-            const cfColor = site.capacityKw && cf >= config.expectedCF[0] ? 'var(--success)' : 'var(--error)';
+            const cfColor = hasCapacity && cf >= config.expectedCF[0] ? 'var(--success)' : 'var(--error)';
 
             document.getElementById('hourlyStats').innerHTML = `
                 <div class="stat-card" style="padding: 0.75rem;">
@@ -1345,7 +1349,7 @@
                 </div>
                 <div class="stat-card" style="padding: 0.75rem;">
                     <div class="label">Capacity Factor</div>
-                    <div class="value" style="font-size: 1.25rem; color: ${site.capacityKw ? cfColor : 'var(--text-primary)'}">${site.capacityKw ? formatNumber(cf, 1) + '%' : '-'}</div>
+                    <div class="value" style="font-size: 1.25rem; color: ${hasCapacity ? cfColor : 'var(--text-primary)'}">${hasCapacity ? formatNumber(cf, 1) + '%' : '-'}</div>
                 </div>
                 <div class="stat-card" style="padding: 0.75rem;">
                     <div class="label">Peak HH</div>
@@ -1486,7 +1490,11 @@
         document.getElementById('capacityInput').addEventListener('input', (e) => {
             const site = sites.find(s => s.id === selectedSiteId);
             if (site) {
-                site.capacityKw = parseFloat(e.target.value) || null;
+                const value = parseFloat(e.target.value);
+                site.capacityKw = isNaN(value) || value <= 0 ? null : value;
+                if (selectedSiteId) {
+                    updateSiteDetailView();
+                }
                 updateUI();
             }
         });
