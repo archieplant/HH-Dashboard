@@ -1058,17 +1058,31 @@
 
         function updateSitesList() {
             const container = document.getElementById('sitesList');
-            const noSitesMsg = document.getElementById('noSitesMsg');
+            let noSitesMsg = document.getElementById('noSitesMsg');
+
+            // Remove all site items but preserve noSitesMsg
+            const childrenToRemove = Array.from(container.children).filter(
+                child => child.id !== 'noSitesMsg'
+            );
+            childrenToRemove.forEach(child => container.removeChild(child));
 
             if (sites.length === 0) {
+                // If noSitesMsg was removed, recreate it
+                if (!noSitesMsg) {
+                    noSitesMsg = document.createElement('p');
+                    noSitesMsg.id = 'noSitesMsg';
+                    noSitesMsg.className = 'text-muted';
+                    noSitesMsg.style.fontSize = '0.875rem';
+                    noSitesMsg.textContent = 'No sites loaded yet';
+                    container.appendChild(noSitesMsg);
+                }
                 noSitesMsg.classList.remove('hidden');
-                container.innerHTML = '';
-                container.appendChild(noSitesMsg);
                 return;
             }
 
-            noSitesMsg.classList.add('hidden');
-            container.innerHTML = '';
+            if (noSitesMsg) {
+                noSitesMsg.classList.add('hidden');
+            }
 
             sites.forEach(site => {
                 const stats = calculateSiteStats(site);
@@ -1522,6 +1536,9 @@
             const site = sites.find(s => s.id === selectedSiteId);
             if (site) {
                 site.assetType = e.target.value;
+                if (selectedSiteId) {
+                    updateSiteDetailView();
+                }
                 updateUI();
             }
         });
