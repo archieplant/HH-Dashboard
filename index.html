@@ -1043,44 +1043,66 @@
             }
 
             noSitesMsg.classList.add('hidden');
-            container.innerHTML = sites.map(site => {
+            container.innerHTML = '';
+
+            sites.forEach(site => {
                 const stats = calculateSiteStats(site);
                 const config = ASSET_TYPES[site.assetType];
-                return `
-                    <div class="site-item ${site.id === selectedSiteId ? 'active' : ''}"
-                         onclick="selectSite('${site.id}')"
-                         data-site-id="${site.id}">
-                        <div class="info">
-                            <div class="name">${config.icon} ${site.name}</div>
-                            <div class="meta">${stats ? formatNumber(stats.totalMwh, 1) + ' MWh • ' + site.data.length + ' days' : 'Configure capacity'}</div>
-                        </div>
-                        <button class="remove-btn" onclick="event.stopPropagation(); removeSite('${site.id}')">✕</button>
+
+                const siteItem = document.createElement('div');
+                siteItem.className = `site-item ${site.id === selectedSiteId ? 'active' : ''}`;
+                siteItem.dataset.siteId = site.id;
+
+                siteItem.innerHTML = `
+                    <div class="info">
+                        <div class="name">${config.icon} ${site.name}</div>
+                        <div class="meta">${stats ? formatNumber(stats.totalMwh, 1) + ' MWh • ' + site.data.length + ' days' : 'Configure capacity'}</div>
                     </div>
+                    <button class="remove-btn">✕</button>
                 `;
-            }).join('');
+
+                // Add click handler for site selection
+                siteItem.addEventListener('click', (e) => {
+                    if (!e.target.classList.contains('remove-btn')) {
+                        selectSite(site.id);
+                    }
+                });
+
+                // Add click handler for remove button
+                const removeBtn = siteItem.querySelector('.remove-btn');
+                removeBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    removeSite(site.id);
+                });
+
+                container.appendChild(siteItem);
+            });
         }
 
         function updatePortfolioTable() {
             const tbody = document.getElementById('portfolioTableBody');
+            tbody.innerHTML = '';
 
-            tbody.innerHTML = sites.map(site => {
+            sites.forEach(site => {
                 const stats = calculateSiteStats(site);
                 const config = ASSET_TYPES[site.assetType];
                 const cfColor = stats && site.capacityKw && stats.capacityFactor >= config.expectedCF[0]
                     ? 'text-success' : 'text-error';
 
-                return `
-                    <tr onclick="selectSite('${site.id}')">
-                        <td><strong>${config.icon} ${site.name}</strong></td>
-                        <td>${config.name}</td>
-                        <td>${site.capacityKw ? site.capacityKw + ' kW' : '-'}</td>
-                        <td>${stats ? formatNumber(stats.totalMwh, 1) : '-'}</td>
-                        <td class="${cfColor}">${stats && site.capacityKw ? formatNumber(stats.capacityFactor, 1) + '%' : '-'}</td>
-                        <td>${stats ? formatNumber(stats.availability, 1) + '%' : '-'}</td>
-                        <td>${site.data.length}</td>
-                    </tr>
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td><strong>${config.icon} ${site.name}</strong></td>
+                    <td>${config.name}</td>
+                    <td>${site.capacityKw ? site.capacityKw + ' kW' : '-'}</td>
+                    <td>${stats ? formatNumber(stats.totalMwh, 1) : '-'}</td>
+                    <td class="${cfColor}">${stats && site.capacityKw ? formatNumber(stats.capacityFactor, 1) + '%' : '-'}</td>
+                    <td>${stats ? formatNumber(stats.availability, 1) + '%' : '-'}</td>
+                    <td>${site.data.length}</td>
                 `;
-            }).join('');
+
+                row.addEventListener('click', () => selectSite(site.id));
+                tbody.appendChild(row);
+            });
         }
 
         function selectSite(siteId) {
