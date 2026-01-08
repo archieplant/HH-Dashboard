@@ -709,7 +709,7 @@
                     <div class="hidden" id="hourlyView">
                         <div class="chart-container">
                             <h3>Select Day</h3>
-                            <select class="day-selector" id="daySelector"></select>
+                            <input type="date" class="day-selector" id="daySelector">
                             <div class="stats-grid" id="hourlyStats" style="margin-top: 1rem;"></div>
                             <h3 id="hourlyChartTitle">Half-Hourly Profile</h3>
                             <div class="chart-wrapper">
@@ -767,25 +767,25 @@
             AD: {
                 name: 'Anaerobic Digestion',
                 color: '#14b8a6',
-                expectedCF: [80, 95],
+                cfThresholds: { green: 70, orange: 60 }, // ≥70 green, 60-70 orange, <60 red
                 icon: '🌿'
             },
             Wind: {
                 name: 'Wind',
                 color: '#3b82f6',
-                expectedCF: [25, 45],
+                cfThresholds: { green: 30, orange: 20 }, // ≥30 green, 20-30 orange, <20 red
                 icon: '💨'
             },
             Solar: {
                 name: 'Solar',
                 color: '#f59e0b',
-                expectedCF: [10, 15],
+                cfThresholds: { green: 10, orange: 5 }, // ≥10 green, 5-10 orange, <5 red
                 icon: '☀️'
             },
             Hydro: {
                 name: 'Hydro',
                 color: '#06b6d4',
-                expectedCF: [25, 45],
+                cfThresholds: { green: 45, orange: 35 }, // ≥45 green, 35-45 orange, <35 red
                 icon: '💧'
             }
         };
@@ -803,6 +803,25 @@
         let mainChart = null;
         let cfChart = null;
         let hourlyChart = null;
+
+        /*
+         * ===========================================
+         * UTILITY FUNCTIONS
+         * ===========================================
+         */
+        function getCFColor(cf, assetType) {
+            const thresholds = ASSET_TYPES[assetType].cfThresholds;
+            if (cf >= thresholds.green) return 'var(--success)';
+            if (cf >= thresholds.orange) return 'var(--warning)';
+            return 'var(--error)';
+        }
+
+        function getCFColorClass(cf, assetType) {
+            const thresholds = ASSET_TYPES[assetType].cfThresholds;
+            if (cf >= thresholds.green) return 'text-success';
+            if (cf >= thresholds.orange) return 'text-warning';
+            return 'text-error';
+        }
 
         /*
          * ===========================================
@@ -1087,8 +1106,9 @@
                 const stats = calculateSiteStats(site);
                 const config = ASSET_TYPES[site.assetType];
                 const hasCapacity = site.capacityKw && site.capacityKw > 0;
-                const cfColor = stats && hasCapacity && stats.capacityFactor >= config.expectedCF[0]
-                    ? 'text-success' : 'text-error';
+                const cfColor = stats && hasCapacity
+                    ? getCFColorClass(stats.capacityFactor, site.assetType)
+                    : '';
 
                 const row = document.createElement('tr');
                 row.innerHTML = `
@@ -1130,17 +1150,18 @@
         }
 
         function populateDaySelector(site) {
-            if (!site || !site.data) return;
+            if (!site || !site.data || site.data.length === 0) return;
 
             const selector = document.getElementById('daySelector');
-            selector.innerHTML = '';
-            const reversed = [...site.data].reverse();
-            reversed.forEach(day => {
-                const option = document.createElement('option');
-                option.value = day.dateStr;
-                option.textContent = `${day.date.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })} — ${formatNumber(day.dailyKwh, 0)} kWh`;
-                selector.appendChild(option);
-            });
+            const firstDate = site.data[0].dateStr;
+            const lastDate = site.data[site.data.length - 1].dateStr;
+
+            // Set min and max dates based on available data
+            selector.min = firstDate;
+            selector.max = lastDate;
+
+            // Set default to most recent date
+            selector.value = lastDate;
         }
 
         function updateSiteDetailView() {
@@ -1149,11 +1170,13 @@
 
             const stats = calculateSiteStats(site);
             const config = ASSET_TYPES[site.assetType];
+            const hasCapacity = site.capacityKw && site.capacityKw > 0;
 
-            const cfColor = site.capacityKw && stats.capacityFactor >= config.expectedCF[0] ? 'var(--success)' : 'var(--error)';
+            const cfColor = hasCapacity ? getCFColor(stats.capacityFactor, site.assetType) : 'var(--text-primary)';
             const availColor = stats.availability >= 95 ? 'var(--success)' : 'var(--warning)';
 
-            const hasCapacity = site.capacityKw && site.capacityKw > 0;
+            const thresholds = config.cfThresholds;
+            const targetText = `≥${thresholds.green}% target`;
 
             document.getElementById('statsGrid').innerHTML = `
                 <div class="stat-card">
@@ -1163,8 +1186,8 @@
                 </div>
                 <div class="stat-card">
                     <div class="label">Capacity Factor</div>
-                    <div class="value" style="color: ${hasCapacity ? cfColor : 'var(--text-primary)'}">${hasCapacity ? formatNumber(stats.capacityFactor, 1) + '%' : 'Set capacity'}</div>
-                    <div class="subtitle">Target: ${config.expectedCF[0]}-${config.expectedCF[1]}%</div>
+                    <div class="value" style="color: ${cfColor}">${hasCapacity ? formatNumber(stats.capacityFactor, 1) + '%' : 'Set capacity'}</div>
+                    <div class="subtitle">${targetText}</div>
                 </div>
                 <div class="stat-card">
                     <div class="label">Last 12 Months</div>
@@ -1332,6 +1355,16 @@
             const config = ASSET_TYPES[site.assetType];
             const hourlyData = getHourlyData(site, selectedDate);
 
+            // If no data for selected date, show message
+            if (hourlyData.length === 0) {
+                document.getElementById('hourlyStats').innerHTML = `
+                    <div style="grid-column: 1/-1; text-align: center; padding: 2rem; color: var(--text-secondary);">
+                        No data available for ${selectedDate}. Please select a date within the available range.
+                    </div>
+                `;
+                return;
+            }
+
             const genValues = hourlyData.map(h => h.generation);
             const total = genValues.reduce((a, b) => a + b, 0);
             const max = Math.max(...genValues);
@@ -1340,7 +1373,7 @@
             const hasCapacity = site.capacityKw && site.capacityKw > 0;
             const cf = hasCapacity ? (total / (site.capacityKw * 24)) * 100 : 0;
 
-            const cfColor = hasCapacity && cf >= config.expectedCF[0] ? 'var(--success)' : 'var(--error)';
+            const cfColor = hasCapacity ? getCFColor(cf, site.assetType) : 'var(--text-primary)';
 
             document.getElementById('hourlyStats').innerHTML = `
                 <div class="stat-card" style="padding: 0.75rem;">
