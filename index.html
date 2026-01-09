@@ -731,7 +731,10 @@
 
                 <!-- Site Detail View (hidden until site selected) -->
                 <div class="hidden" id="siteDetailView">
-                    <button class="back-btn" id="backToPortfolio">← Back to Portfolio</button>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                        <button class="back-btn" id="backToPortfolio" style="margin-bottom: 0;">← Back to Portfolio</button>
+                        <button class="btn btn-secondary" id="downloadReport">Download Report</button>
+                    </div>
 
                     <!-- Stats Cards -->
                     <div class="stats-grid" id="statsGrid">
@@ -961,9 +964,12 @@
             const bestDay = sortedByOutput[0];
             const worstDay = sortedByOutput[sortedByOutput.length - 1];
 
-            const cutoff = new Date(site.data[site.data.length - 1].date);
-            cutoff.setDate(cutoff.getDate() - 365);
-            const last12m = site.data.filter(d => d.date >= cutoff);
+            // Last 12 complete months (not partial months)
+            // E.g., if latest data is May 15th, use May 1st prev year → April 30th current year
+            const lastDataDate = site.data[site.data.length - 1].date;
+            const cutoffEnd = new Date(lastDataDate.getFullYear(), lastDataDate.getMonth(), 0); // End of previous month
+            const cutoffStart = new Date(cutoffEnd.getFullYear(), cutoffEnd.getMonth() - 11, 1); // Start of month 12 months before
+            const last12m = site.data.filter(d => d.date >= cutoffStart && d.date <= cutoffEnd);
             const l12mKwh = last12m.reduce((sum, d) => sum + d.dailyKwh, 0);
             const l12mCf = last12m.length > 0 && cap > 0 ? (l12mKwh / (cap * last12m.length * 24)) * 100 : 0;
 
@@ -1710,6 +1716,132 @@
 
         /*
          * ===========================================
+         * EXPORT FUNCTIONS
+         * ===========================================
+         */
+        function downloadReport() {
+            const site = sites.find(s => s.id === selectedSiteId);
+            if (!site) return;
+
+            const wb = XLSX.utils.book_new();
+
+            // Sheet 1: Summary + Outages
+            const summaryData = buildSummarySheet(site);
+            const ws1 = XLSX.utils.aoa_to_sheet(summaryData);
+            XLSX.utils.book_append_sheet(wb, ws1, 'Summary');
+
+            // Sheet 2: Current View Data
+            const viewData = buildViewDataSheet(site, currentView);
+            const ws2 = XLSX.utils.aoa_to_sheet(viewData);
+            XLSX.utils.book_append_sheet(wb, ws2, getViewSheetName(currentView));
+
+            // Download
+            const filename = `${site.name.replace(/[^a-z0-9]/gi, '_')}_Report_${new Date().toISOString().split('T')[0]}.xlsx`;
+            XLSX.writeFile(wb, filename);
+        }
+
+        function buildSummarySheet(site) {
+            const stats = calculateSiteStats(site);
+            const outages = site.data.filter(d => d.dailyKwh === 0);
+
+            const rows = [
+                ['Site Summary'],
+                [''],
+                ['Site Name', site.name],
+                ['MPAN', site.mpan],
+                ['Asset Type', ASSET_TYPES[site.assetType].name],
+                ['Capacity (kW)', site.capacityKw || 'Not set'],
+                ['Data Range', `${stats.dateRange.start} to ${stats.dateRange.end}`],
+                ['Total Days', stats.totalDays],
+                [''],
+                ['Performance'],
+                ['Total Generation (MWh)', parseFloat(stats.totalMwh.toFixed(1))],
+                ['Overall Capacity Factor', stats.capacityFactor.toFixed(1) + '%'],
+                ['Last 12 Months (MWh)', parseFloat(stats.last12mMwh.toFixed(1))],
+                ['Last 12 Months CF', stats.last12mCf.toFixed(1) + '%'],
+                ['Availability', stats.availability.toFixed(1) + '%'],
+                [''],
+                ['Best Day', stats.bestDay.date.toLocaleDateString('en-GB'), parseFloat(stats.bestDay.dailyKwh.toFixed(0)) + ' kWh'],
+                ['Worst Day', stats.worstDay.date.toLocaleDateString('en-GB'), parseFloat(stats.worstDay.dailyKwh.toFixed(0)) + ' kWh'],
+                [''],
+                [''],
+                ['Outages (0 Generation Days)', `${outages.length} days`],
+                ['Date', 'Generation (kWh)']
+            ];
+
+            // Add outage rows
+            outages.forEach(d => {
+                rows.push([d.date.toLocaleDateString('en-GB'), 0]);
+            });
+
+            return rows;
+        }
+
+        function buildViewDataSheet(site, view) {
+            const chartData = getChartData(site, view);
+            const periodStats = calculatePeriodStats(chartData, view, site);
+
+            // Header with stats
+            const rows = [
+                [`${view.charAt(0).toUpperCase() + view.slice(1)} View Data`],
+                ['']
+            ];
+
+            if (periodStats) {
+                rows.push(['Period Total', parseFloat(periodStats.total.toFixed(1)) + ' ' + periodStats.unit]);
+                rows.push(['Average CF', periodStats.cf.toFixed(1) + '%']);
+                rows.push(['Peak', parseFloat(periodStats.peak.toFixed(1)) + ' ' + periodStats.unit]);
+                rows.push(['Min', parseFloat(periodStats.min.toFixed(1)) + ' ' + periodStats.unit]);
+                rows.push(['Average', parseFloat(periodStats.avg.toFixed(1)) + ' ' + periodStats.unit]);
+                rows.push(['']);
+            }
+
+            // Column headers and data based on view
+            if (view === 'hourly') {
+                const selectedDay = document.getElementById('daySelector').value;
+                const hourlyData = getHourlyData(site, selectedDay);
+                rows.push(['Period', 'Time', 'Generation (kWh)', 'Utilisation (%)']);
+                hourlyData.forEach(d => {
+                    rows.push([d.period, d.time, parseFloat(d.generation.toFixed(2)), parseFloat(d.utilisation.toFixed(1))]);
+                });
+            } else if (view === 'day') {
+                rows.push(['Date', 'Generation (kWh)', 'Capacity Factor (%)']);
+                chartData.forEach(d => {
+                    rows.push([d.date.toLocaleDateString('en-GB'), parseFloat(d.generation.toFixed(1)), parseFloat(d.cf.toFixed(1))]);
+                });
+            } else if (view === 'week') {
+                rows.push(['Week Starting', 'Generation (MWh)', 'Capacity Factor (%)']);
+                chartData.forEach(d => {
+                    rows.push([d.label, parseFloat(d.generation.toFixed(2)), parseFloat(d.cf.toFixed(1))]);
+                });
+            } else if (view === 'month') {
+                rows.push(['Month', 'Generation (MWh)', 'Capacity Factor (%)']);
+                chartData.forEach(d => {
+                    rows.push([d.label, parseFloat(d.generation.toFixed(2)), parseFloat(d.cf.toFixed(1))]);
+                });
+            } else if (view === 'year') {
+                rows.push(['Year', 'Generation (MWh)', 'Capacity Factor (%)']);
+                chartData.forEach(d => {
+                    rows.push([d.label, parseFloat(d.generation.toFixed(2)), parseFloat(d.cf.toFixed(1))]);
+                });
+            }
+
+            return rows;
+        }
+
+        function getViewSheetName(view) {
+            const names = {
+                hourly: 'Hourly Data',
+                day: 'Daily Data',
+                week: 'Weekly Data',
+                month: 'Monthly Data',
+                year: 'Yearly Data'
+            };
+            return names[view] || 'Data';
+        }
+
+        /*
+         * ===========================================
          * EVENT LISTENERS
          * ===========================================
          */
@@ -1865,6 +1997,8 @@
         document.getElementById('daySelector').addEventListener('change', updateHourlyView);
 
         document.getElementById('backToPortfolio').addEventListener('click', backToPortfolio);
+
+        document.getElementById('downloadReport').addEventListener('click', downloadReport);
 
         // Drag and drop
         const uploadArea = document.getElementById('uploadArea');
