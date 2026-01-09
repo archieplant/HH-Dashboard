@@ -571,6 +571,59 @@
             color: var(--accent);
         }
 
+        /* Data Quality Banner */
+        .quality-banner {
+            background: #fef3c7;
+            border: 1px solid #f59e0b;
+            border-radius: 0.5rem;
+            padding: 0.75rem 1rem;
+            margin-bottom: 1rem;
+            color: #92400e;
+        }
+        .quality-banner.error {
+            background: #fee2e2;
+            border-color: #ef4444;
+            color: #991b1b;
+        }
+        .banner-header {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .banner-icon {
+            font-size: 1.25rem;
+        }
+        .banner-text {
+            font-weight: 500;
+        }
+        .banner-toggle {
+            margin-left: auto;
+            background: none;
+            border: none;
+            color: inherit;
+            cursor: pointer;
+            font-size: 0.875rem;
+            text-decoration: underline;
+        }
+        .banner-toggle:hover {
+            opacity: 0.8;
+        }
+        .banner-details {
+            margin-top: 0.75rem;
+            padding-top: 0.75rem;
+            border-top: 1px solid currentColor;
+            font-size: 0.875rem;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .banner-details ul {
+            margin: 0;
+            padding-left: 1.25rem;
+        }
+        .banner-details li {
+            margin-bottom: 0.25rem;
+        }
+
         /* Utility Classes */
         .hidden { display: none !important; }
         .text-success { color: var(--success); }
@@ -690,6 +743,19 @@
                     <label>Capacity (kW)</label>
                     <input type="number" id="capacityInput" placeholder="e.g. 200">
                 </div>
+                <h4 style="margin-top: 1.5rem; margin-bottom: 0.75rem; color: var(--text-secondary); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;">Financial Settings</h4>
+                <div class="form-group">
+                    <label>Power Price (£/MWh)</label>
+                    <input type="number" id="powerPriceInput" placeholder="e.g. 85" step="0.01">
+                </div>
+                <div class="form-group">
+                    <label>Commission (£/MWh)</label>
+                    <input type="number" id="commissionInput" placeholder="e.g. 5" step="0.01">
+                </div>
+                <div class="form-group">
+                    <label>Subsidy (£/MWh)</label>
+                    <input type="number" id="subsidyInput" placeholder="e.g. 50" step="0.01">
+                </div>
             </div>
         </aside>
 
@@ -734,6 +800,18 @@
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
                         <button class="back-btn" id="backToPortfolio" style="margin-bottom: 0;">← Back to Portfolio</button>
                         <button class="btn btn-secondary" id="downloadReport">Download Report</button>
+                    </div>
+
+                    <!-- Data Quality Warning Banner -->
+                    <div id="dataQualityBanner" class="quality-banner hidden">
+                        <div class="banner-header">
+                            <span class="banner-icon">⚠️</span>
+                            <span class="banner-text">Data quality issues detected</span>
+                            <button class="banner-toggle" id="bannerToggle">Show Details</button>
+                        </div>
+                        <div class="banner-details hidden" id="bannerDetails">
+                            <ul id="issuesList"></ul>
+                        </div>
                     </div>
 
                     <!-- Stats Cards -->
@@ -825,24 +903,28 @@
                 name: 'Anaerobic Digestion',
                 color: '#14b8a6',
                 cfThresholds: { green: 70, orange: 60 }, // ≥70 green, 60-70 orange, <60 red
+                cfWarning: 95, // Flag CF above this as suspicious
                 icon: '🌿'
             },
             Wind: {
                 name: 'Wind',
                 color: '#3b82f6',
                 cfThresholds: { green: 30, orange: 20 }, // ≥30 green, 20-30 orange, <20 red
+                cfWarning: 60, // Flag CF above this as suspicious
                 icon: '💨'
             },
             Solar: {
                 name: 'Solar',
                 color: '#f59e0b',
                 cfThresholds: { green: 10, orange: 5 }, // ≥10 green, 5-10 orange, <5 red
+                cfWarning: 30, // Flag CF above this as suspicious
                 icon: '☀️'
             },
             Hydro: {
                 name: 'Hydro',
                 color: '#06b6d4',
                 cfThresholds: { green: 45, orange: 35 }, // ≥45 green, 35-45 orange, <35 red
+                cfWarning: 70, // Flag CF above this as suspicious
                 icon: '💧'
             }
         };
@@ -942,8 +1024,91 @@
                 name: filename.replace(/\.[^/.]+$/, ''),
                 assetType: 'AD',
                 capacityKw: null,
+                powerPrice: null,    // £/MWh revenue rate
+                commission: null,    // £/MWh commission cost
+                subsidy: null,       // £/MWh subsidy income (FiT, ROC, etc.)
                 data
             };
+        }
+
+        /*
+         * ===========================================
+         * DATA VALIDATION
+         * ===========================================
+         */
+        function validateSiteData(site) {
+            const issues = [];
+            if (!site || !site.data || site.data.length === 0) return issues;
+
+            const cfWarning = ASSET_TYPES[site.assetType].cfWarning;
+
+            // Check for gaps in dates (missing days)
+            for (let i = 1; i < site.data.length; i++) {
+                const daysDiff = (site.data[i].date - site.data[i-1].date) / (1000 * 86400);
+                if (daysDiff > 1.5) {
+                    const missingDays = Math.floor(daysDiff - 1);
+                    issues.push({
+                        type: 'gap',
+                        severity: 'warning',
+                        message: `Missing ${missingDays} day${missingDays > 1 ? 's' : ''} between ${site.data[i-1].date.toLocaleDateString('en-GB')} and ${site.data[i].date.toLocaleDateString('en-GB')}`
+                    });
+                }
+            }
+
+            // Check for negative values and suspiciously high CF
+            site.data.forEach(d => {
+                if (d.dailyKwh < 0) {
+                    issues.push({
+                        type: 'negative',
+                        severity: 'error',
+                        message: `Negative generation (${d.dailyKwh.toFixed(1)} kWh) on ${d.date.toLocaleDateString('en-GB')}`
+                    });
+                }
+
+                // Check daily CF if capacity is set
+                if (site.capacityKw && site.capacityKw > 0) {
+                    const dailyCf = (d.dailyKwh / (site.capacityKw * 24)) * 100;
+                    if (dailyCf > 100) {
+                        issues.push({
+                            type: 'high_cf',
+                            severity: 'error',
+                            message: `Impossible CF ${dailyCf.toFixed(1)}% (>${100}%) on ${d.date.toLocaleDateString('en-GB')}`
+                        });
+                    } else if (dailyCf > cfWarning) {
+                        issues.push({
+                            type: 'high_cf',
+                            severity: 'warning',
+                            message: `Suspicious CF ${dailyCf.toFixed(1)}% (>${cfWarning}% for ${ASSET_TYPES[site.assetType].name}) on ${d.date.toLocaleDateString('en-GB')}`
+                        });
+                    }
+                }
+            });
+
+            return issues;
+        }
+
+        /*
+         * ===========================================
+         * FINANCIAL CALCULATIONS
+         * ===========================================
+         */
+        function calculateFinancials(site, mwh) {
+            const powerPrice = site.powerPrice || 0;
+            const commission = site.commission || 0;
+            const subsidy = site.subsidy || 0;
+
+            const gross = mwh * powerPrice;
+            const commissionCost = mwh * commission;
+            const subsidyIncome = mwh * subsidy;
+            const net = gross - commissionCost + subsidyIncome;
+
+            return { gross, commissionCost, subsidyIncome, net };
+        }
+
+        function hasFinancialSettings(site) {
+            return (site.powerPrice && site.powerPrice > 0) ||
+                   (site.commission && site.commission > 0) ||
+                   (site.subsidy && site.subsidy > 0);
         }
 
         /*
@@ -1319,6 +1484,9 @@
                 document.getElementById('siteNameInput').value = site.name;
                 document.getElementById('assetTypeSelect').value = site.assetType;
                 document.getElementById('capacityInput').value = site.capacityKw || '';
+                document.getElementById('powerPriceInput').value = site.powerPrice || '';
+                document.getElementById('commissionInput').value = site.commission || '';
+                document.getElementById('subsidyInput').value = site.subsidy || '';
 
                 populateDaySelector(site);
                 initializeDateRangePickers(site);
@@ -1350,13 +1518,40 @@
             const config = ASSET_TYPES[site.assetType];
             const hasCapacity = site.capacityKw && site.capacityKw > 0;
 
+            // Data quality validation
+            const issues = validateSiteData(site);
+            const banner = document.getElementById('dataQualityBanner');
+            const issuesList = document.getElementById('issuesList');
+
+            if (issues.length > 0) {
+                const hasErrors = issues.some(i => i.severity === 'error');
+                banner.classList.remove('hidden', 'error');
+                if (hasErrors) banner.classList.add('error');
+
+                // Group issues by type for cleaner display
+                const errorCount = issues.filter(i => i.severity === 'error').length;
+                const warningCount = issues.filter(i => i.severity === 'warning').length;
+                document.querySelector('.banner-text').textContent =
+                    `Data quality issues: ${errorCount} error${errorCount !== 1 ? 's' : ''}, ${warningCount} warning${warningCount !== 1 ? 's' : ''}`;
+
+                issuesList.innerHTML = issues.slice(0, 50).map(i =>
+                    `<li style="color: ${i.severity === 'error' ? '#991b1b' : '#92400e'}">${i.message}</li>`
+                ).join('') + (issues.length > 50 ? `<li>... and ${issues.length - 50} more</li>` : '');
+            } else {
+                banner.classList.add('hidden');
+            }
+
             const cfColor = hasCapacity ? getCFColor(stats.capacityFactor, site.assetType) : 'var(--text-primary)';
             const availColor = stats.availability >= 95 ? 'var(--success)' : 'var(--warning)';
 
             const thresholds = config.cfThresholds;
             const targetText = `≥${thresholds.green}% target`;
 
-            document.getElementById('statsGrid').innerHTML = `
+            // Financial calculations
+            const financials = calculateFinancials(site, stats.totalMwh);
+            const showFinancials = hasFinancialSettings(site);
+
+            let statsHTML = `
                 <div class="stat-card">
                     <div class="label">Total Generation</div>
                     <div class="value">${formatNumber(stats.totalMwh, 1)} MWh</div>
@@ -1383,6 +1578,20 @@
                     <div class="subtitle">${stats.outageDays} outage days</div>
                 </div>
             `;
+
+            // Add financial card if settings are configured
+            if (showFinancials) {
+                const l12mFinancials = calculateFinancials(site, stats.last12mMwh);
+                statsHTML += `
+                    <div class="stat-card">
+                        <div class="label">Est. Revenue (Total)</div>
+                        <div class="value" style="color: var(--success)">£${formatNumber(financials.net, 0)}</div>
+                        <div class="subtitle">L12M: £${formatNumber(l12mFinancials.net, 0)}</div>
+                    </div>
+                `;
+            }
+
+            document.getElementById('statsGrid').innerHTML = statsHTML;
 
             updateCharts();
         }
@@ -1743,6 +1952,7 @@
         function buildSummarySheet(site) {
             const stats = calculateSiteStats(site);
             const outages = site.data.filter(d => d.dailyKwh === 0);
+            const issues = validateSiteData(site);
 
             const rows = [
                 ['Site Summary'],
@@ -1762,17 +1972,50 @@
                 ['Availability', stats.availability.toFixed(1) + '%'],
                 [''],
                 ['Best Day', stats.bestDay.date.toLocaleDateString('en-GB'), parseFloat(stats.bestDay.dailyKwh.toFixed(0)) + ' kWh'],
-                ['Worst Day', stats.worstDay.date.toLocaleDateString('en-GB'), parseFloat(stats.worstDay.dailyKwh.toFixed(0)) + ' kWh'],
-                [''],
-                [''],
-                ['Outages (0 Generation Days)', `${outages.length} days`],
-                ['Date', 'Generation (kWh)']
+                ['Worst Day', stats.worstDay.date.toLocaleDateString('en-GB'), parseFloat(stats.worstDay.dailyKwh.toFixed(0)) + ' kWh']
             ];
 
-            // Add outage rows
+            // Financial section if configured
+            if (hasFinancialSettings(site)) {
+                const financials = calculateFinancials(site, stats.totalMwh);
+                const l12mFinancials = calculateFinancials(site, stats.last12mMwh);
+
+                rows.push(['']);
+                rows.push(['Financial Settings']);
+                rows.push(['Power Price (£/MWh)', site.powerPrice || 0]);
+                rows.push(['Commission (£/MWh)', site.commission || 0]);
+                rows.push(['Subsidy (£/MWh)', site.subsidy || 0]);
+                rows.push(['']);
+                rows.push(['Financial Summary']);
+                rows.push(['Gross Revenue (Total)', '£' + formatNumber(financials.gross, 0)]);
+                rows.push(['Commission Cost (Total)', '£' + formatNumber(financials.commissionCost, 0)]);
+                rows.push(['Subsidy Income (Total)', '£' + formatNumber(financials.subsidyIncome, 0)]);
+                rows.push(['Net Revenue (Total)', '£' + formatNumber(financials.net, 0)]);
+                rows.push(['Net Revenue (L12M)', '£' + formatNumber(l12mFinancials.net, 0)]);
+            }
+
+            // Outages section
+            rows.push(['']);
+            rows.push(['']);
+            rows.push(['Outages (0 Generation Days)', `${outages.length} days`]);
+            rows.push(['Date', 'Generation (kWh)']);
             outages.forEach(d => {
                 rows.push([d.date.toLocaleDateString('en-GB'), 0]);
             });
+
+            // Data quality issues section
+            if (issues.length > 0) {
+                rows.push(['']);
+                rows.push(['']);
+                rows.push(['Data Quality Issues', `${issues.length} issues found`]);
+                rows.push(['Severity', 'Issue']);
+                issues.slice(0, 100).forEach(issue => {
+                    rows.push([issue.severity.toUpperCase(), issue.message]);
+                });
+                if (issues.length > 100) {
+                    rows.push(['...', `${issues.length - 100} more issues not shown`]);
+                }
+            }
 
             return rows;
         }
@@ -1898,6 +2141,42 @@
                 }
                 updateUI();
             }
+        });
+
+        // Financial input listeners
+        document.getElementById('powerPriceInput').addEventListener('input', (e) => {
+            const site = sites.find(s => s.id === selectedSiteId);
+            if (site) {
+                const value = parseFloat(e.target.value);
+                site.powerPrice = isNaN(value) || value < 0 ? null : value;
+                updateSiteDetailView();
+            }
+        });
+
+        document.getElementById('commissionInput').addEventListener('input', (e) => {
+            const site = sites.find(s => s.id === selectedSiteId);
+            if (site) {
+                const value = parseFloat(e.target.value);
+                site.commission = isNaN(value) || value < 0 ? null : value;
+                updateSiteDetailView();
+            }
+        });
+
+        document.getElementById('subsidyInput').addEventListener('input', (e) => {
+            const site = sites.find(s => s.id === selectedSiteId);
+            if (site) {
+                const value = parseFloat(e.target.value);
+                site.subsidy = isNaN(value) || value < 0 ? null : value;
+                updateSiteDetailView();
+            }
+        });
+
+        // Banner toggle listener
+        document.getElementById('bannerToggle').addEventListener('click', () => {
+            const details = document.getElementById('bannerDetails');
+            const toggle = document.getElementById('bannerToggle');
+            details.classList.toggle('hidden');
+            toggle.textContent = details.classList.contains('hidden') ? 'Show Details' : 'Hide Details';
         });
 
         document.getElementById('viewTabs').addEventListener('click', (e) => {
