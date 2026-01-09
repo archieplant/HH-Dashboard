@@ -1657,7 +1657,12 @@
                         mainChartContainer.insertBefore(statsContainer, mainChartContainer.firstChild);
                     }
 
-                    statsContainer.innerHTML = `
+                    // Calculate period financials (convert to MWh if needed)
+                    const periodMwh = currentView === 'day' ? periodStats.total / 1000 : periodStats.total;
+                    const periodFinancials = calculateFinancials(site, periodMwh);
+                    const showFinancials = hasFinancialSettings(site);
+
+                    let statsHTML = `
                         <div class="stat-card" style="padding: 0.75rem;">
                             <div class="label">Period Total</div>
                             <div class="value" style="font-size: 1.25rem;">${formatNumber(periodStats.total, 1)} ${periodStats.unit}</div>
@@ -1689,6 +1694,21 @@
                             </div>
                         </div>
                     `;
+
+                    // Add financial card if settings configured
+                    if (showFinancials) {
+                        statsHTML += `
+                            <div class="stat-card" style="padding: 0.75rem;">
+                                <div class="label">Period Revenue</div>
+                                <div class="value" style="font-size: 1.25rem; color: var(--success);">
+                                    £${formatNumber(periodFinancials.net, 0)}
+                                </div>
+                                <div class="subtitle">Gross: £${formatNumber(periodFinancials.gross, 0)}</div>
+                            </div>
+                        `;
+                    }
+
+                    statsContainer.innerHTML = statsHTML;
                 }
 
                 // Update title
@@ -1823,7 +1843,12 @@
 
             const cfColor = hasCapacity ? getCFColor(cf, site.assetType) : 'var(--text-primary)';
 
-            document.getElementById('hourlyStats').innerHTML = `
+            // Calculate daily financials
+            const dayMwh = total / 1000;
+            const dayFinancials = calculateFinancials(site, dayMwh);
+            const showFinancials = hasFinancialSettings(site);
+
+            let hourlyStatsHTML = `
                 <div class="stat-card" style="padding: 0.75rem;">
                     <div class="label">Day Total</div>
                     <div class="value" style="font-size: 1.25rem;">${formatNumber(total, 0)} kWh</div>
@@ -1845,6 +1870,21 @@
                     <div class="value" style="font-size: 1.25rem;">${formatNumber(avg, 1)} kWh</div>
                 </div>
             `;
+
+            // Add financial card for daily revenue
+            if (showFinancials) {
+                hourlyStatsHTML += `
+                    <div class="stat-card" style="padding: 0.75rem;">
+                        <div class="label">Day Revenue</div>
+                        <div class="value" style="font-size: 1.25rem; color: var(--success);">
+                            £${formatNumber(dayFinancials.net, 2)}
+                        </div>
+                        <div class="subtitle">Gross: £${formatNumber(dayFinancials.gross, 2)}</div>
+                    </div>
+                `;
+            }
+
+            document.getElementById('hourlyStats').innerHTML = hourlyStatsHTML;
 
             const dayData = site.data.find(d => d.dateStr === selectedDate);
             document.getElementById('hourlyChartTitle').textContent = `Half-Hourly Profile — ${dayData.date.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}`;
