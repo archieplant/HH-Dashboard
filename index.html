@@ -899,6 +899,14 @@
                     date = row.DATE;
                 } else if (typeof row.DATE === 'number') {
                     date = new Date((row.DATE - 25569) * 86400 * 1000);
+                } else if (typeof row.DATE === 'string') {
+                    // Handle UK date format DD/MM/YYYY
+                    const ukMatch = row.DATE.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+                    if (ukMatch) {
+                        date = new Date(parseInt(ukMatch[3]), parseInt(ukMatch[2]) - 1, parseInt(ukMatch[1]));
+                    } else {
+                        date = new Date(row.DATE);
+                    }
                 } else {
                     date = new Date(row.DATE);
                 }
@@ -910,15 +918,18 @@
 
                 const dailyTotal = hhValues.reduce((a, b) => a + b, 0);
 
+                // Only create dateStr if date is valid
+                const isValidDate = date instanceof Date && !isNaN(date.getTime());
+
                 return {
                     date,
-                    dateStr: date.toISOString().split('T')[0],
+                    dateStr: isValidDate ? date.toISOString().split('T')[0] : null,
                     mpan: row.MPAN,
                     hhValues,
                     dailyKwh: dailyTotal,
                     dailyMwh: dailyTotal / 1000
                 };
-            }).filter(d => !isNaN(d.date.getTime()))
+            }).filter(d => d.dateStr !== null)
               .sort((a, b) => a.date - b.date);
 
             return {
